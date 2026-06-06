@@ -25,6 +25,44 @@ final class KokoroTTSTests: XCTestCase {
         XCTAssertEqual(decoded.styleDim, config.styleDim)
     }
 
+    // MARK: - Local Directory Loading
+
+    func testFromLocalDirectoryRequiresKokoroModelDirectory() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        do {
+            _ = try await KokoroTTSModel.fromLocalDirectory(directory)
+            XCTFail("Expected local Kokoro loading to fail without kokoro_5s.mlmodelc")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("kokoro_5s.mlmodelc"))
+        }
+    }
+
+    func testFromLocalDirectoryRequiresVocabIndex() async throws {
+        let directory = try makeLocalKokoroLayout(includeVocab: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        do {
+            _ = try await KokoroTTSModel.fromLocalDirectory(directory)
+            XCTFail("Expected local Kokoro loading to fail without vocab_index.json")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("vocab_index.json"))
+        }
+    }
+
+    func testFromLocalDirectoryRequiresAtLeastOneVoiceJSON() async throws {
+        let directory = try makeLocalKokoroLayout(includeVoiceJSON: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        do {
+            _ = try await KokoroTTSModel.fromLocalDirectory(directory)
+            XCTFail("Expected local Kokoro loading to fail without a voice JSON")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("voice JSON"))
+        }
+    }
+
     // MARK: - Phonemizer Tests
 
     func testPhonemizerTokenize() {
@@ -65,6 +103,49 @@ final class KokoroTTSTests: XCTestCase {
         let ids = phonemizer.tokenize("axyz")
         XCTAssertEqual(ids, [1, 3, 2])
     }
+}
+
+private func makeTemporaryDirectory() throws -> URL {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("KokoroTTSTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+}
+
+private func makeLocalKokoroLayout(
+    includeVocab: Bool = true,
+    includeVoiceJSON: Bool = true
+) throws -> URL {
+    let directory = try makeTemporaryDirectory()
+    let fileManager = FileManager.default
+
+    for modelDirectory in ["kokoro_5s.mlmodelc", "G2PEncoder.mlmodelc", "G2PDecoder.mlmodelc", "voices"] {
+        try fileManager.createDirectory(
+            at: directory.appendingPathComponent(modelDirectory, isDirectory: true),
+            withIntermediateDirectories: true)
+    }
+
+    if includeVocab {
+        try #"{"vocab":{"<pad>":0,"<bos>":1,"<eos>":2,"a":3}}"#.write(
+            to: directory.appendingPathComponent("vocab_index.json"),
+            atomically: true,
+            encoding: .utf8)
+    }
+
+    for fileName in ["g2p_vocab.json", "us_gold.json", "us_silver.json"] {
+        try #"{}"#.write(
+            to: directory.appendingPathComponent(fileName),
+            atomically: true,
+            encoding: .utf8)
+    }
+
+    if includeVoiceJSON {
+        let embedding = Array(repeating: 0.0, count: KokoroConfig.default.styleDim)
+        let voice = try JSONSerialization.data(withJSONObject: ["embedding": embedding])
+        try voice.write(to: directory.appendingPathComponent("voices/af_heart.json"))
+    }
+
+    return directory
 }
 
 // MARK: - Chinese Phonemizer Tests

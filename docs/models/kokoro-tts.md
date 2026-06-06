@@ -172,6 +172,43 @@ let tts = try await KokoroTTSModel.fromPretrained(computeUnits: .cpuAndGPU)
 
 The G2P encoder/decoder always run on CPU regardless of this setting; they are small enough that CPU is the fastest path.
 
+## Local App Bundle Loading
+
+Use `fromLocalDirectory` when shipping Kokoro inside an app bundle or another
+pre-downloaded directory. This loader reads the files directly and never calls
+the HuggingFace downloader or Hub API:
+
+```swift
+let modelURL = Bundle.main.resourceURL!
+    .appendingPathComponent("Kokoro", isDirectory: true)
+
+let tts = try await KokoroTTSModel.fromLocalDirectory(
+    modelURL,
+    computeUnits: .all)
+```
+
+Expected directory layout:
+
+```text
+Kokoro/
+  kokoro_5s.mlmodelc/
+  G2PEncoder.mlmodelc/
+  G2PDecoder.mlmodelc/
+  vocab_index.json
+  g2p_vocab.json
+  us_gold.json
+  us_silver.json
+  voices/
+    af_heart.json
+    ff_siwis.json
+    ef_dora.json
+    zf_xiaobei.json
+```
+
+The loader validates the required files before opening the CoreML model and
+fails clearly if the vocabulary, compiled model directory, voices directory, or
+voice JSON files are missing.
+
 ## Conversion
 
 ```bash
@@ -185,7 +222,7 @@ python scripts/convert_kokoro_coreml.py --output /tmp/kokoro-coreml --quantize i
 Sources/KokoroTTS/
   Configuration.swift        Model config, voice/language selection
   KokoroModel.swift          End-to-end CoreML model loading and inference
-  KokoroTTS.swift            High-level API (fromPretrained, synthesize, alignment)
+  KokoroTTS.swift            High-level API (fromPretrained, fromLocalDirectory, synthesize, alignment)
   Phonemizer.swift           English G2P + multilingual routing (en/zh/ja/hi/fr/es/pt/it)
   ChinesePhonemizer.swift    Chinese: CFStringTransform pinyin → IPA
   JapanesePhonemizer.swift   Japanese: CFStringTokenizer → katakana → IPA (M2P table)

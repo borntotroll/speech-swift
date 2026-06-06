@@ -199,20 +199,81 @@ public final class KokoroTTSModel {
             progressHandler?(fraction * 0.7, "Downloading model...")
         }
 
+        return try loadFromDirectory(
+            cacheDir,
+            modelId: modelId,
+            computeUnits: computeUnits,
+            progressBase: 0.7,
+            progressScale: 0.3,
+            progressHandler: progressHandler
+        )
+    }
+
+    /// Load a Kokoro model directly from a local directory.
+    ///
+    /// This loader never contacts HuggingFace and is intended for app-bundled or
+    /// otherwise pre-downloaded model directories.
+    ///
+    /// Expected layout:
+    ///
+    /// ```text
+    /// Kokoro/
+    ///   kokoro_5s.mlmodelc/
+    ///   G2PEncoder.mlmodelc/
+    ///   G2PDecoder.mlmodelc/
+    ///   vocab_index.json
+    ///   g2p_vocab.json
+    ///   us_gold.json
+    ///   us_silver.json
+    ///   voices/
+    ///     af_heart.json
+    /// ```
+    public static func fromLocalDirectory(
+        _ directory: URL,
+        computeUnits: MLComputeUnits = .all,
+        progressHandler: ((Double, String) -> Void)? = nil
+    ) async throws -> KokoroTTSModel {
+        AudioLog.modelLoading.info("Loading local Kokoro model from \(directory.path)")
+
+        progressHandler?(0.0, "Validating local model...")
+        try validateLocalDirectory(directory)
+
+        return try loadFromDirectory(
+            directory,
+            modelId: "kokoro-local",
+            computeUnits: computeUnits,
+            progressBase: 0.0,
+            progressScale: 1.0,
+            progressHandler: progressHandler
+        )
+    }
+
+    private static func loadFromDirectory(
+        _ directory: URL,
+        modelId: String,
+        computeUnits: MLComputeUnits,
+        progressBase: Double,
+        progressScale: Double,
+        progressHandler: ((Double, String) -> Void)?
+    ) throws -> KokoroTTSModel {
+        func report(_ fraction: Double, _ status: String) {
+            progressHandler?(progressBase + fraction * progressScale, status)
+        }
+
         // Load vocabulary
-        progressHandler?(0.72, "Loading vocabulary...")
-        let vocabURL = cacheDir.appendingPathComponent("vocab_index.json")
+        report(0.07, "Loading vocabulary...")
+        let vocabURL = directory.appendingPathComponent("vocab_index.json")
         guard FileManager.default.fileExists(atPath: vocabURL.path) else {
             throw AudioModelError.modelLoadFailed(modelId: modelId, reason: "vocab_index.json not found")
         }
         let phonemizer = try KokoroPhonemizer.loadVocab(from: vocabURL)
-        try phonemizer.loadDictionaries(from: cacheDir)
+        try phonemizer.loadDictionaries(from: directory)
 
         // Load G2P models
-        progressHandler?(0.76, "Loading G2P models...")
-        let g2pEncoderURL = cacheDir.appendingPathComponent("G2PEncoder.mlmodelc", isDirectory: true)
-        let g2pDecoderURL = cacheDir.appendingPathComponent("G2PDecoder.mlmodelc", isDirectory: true)
-        let g2pVocabURL = cacheDir.appendingPathComponent("g2p_vocab.json")
+        report(0.20, "Loading G2P models...")
+        let g2pEncoderURL = directory.appendingPathComponent("G2PEncoder.mlmodelc", isDirectory: true)
+        let g2pDecoderURL = directory.appendingPathComponent("G2PDecoder.mlmodelc", isDirectory: true)
+        let g2pVocabURL = directory.appendingPathComponent("g2p_vocab.json")
         if FileManager.default.fileExists(atPath: g2pEncoderURL.path) &&
            FileManager.default.fileExists(atPath: g2pDecoderURL.path) {
             try phonemizer.loadG2PModels(
@@ -221,9 +282,9 @@ public final class KokoroTTSModel {
         }
 
         // Load voice embeddings
-        progressHandler?(0.78, "Loading voice embeddings...")
+        report(0.35, "Loading voice embeddings...")
         var voiceEmbeddings = [String: [Float]]()
-        let voicesDir = cacheDir.appendingPathComponent("voices")
+        let voicesDir = directory.appendingPathComponent("voices")
         if FileManager.default.fileExists(atPath: voicesDir.path) {
             let files = try FileManager.default.contentsOfDirectory(at: voicesDir, includingPropertiesForKeys: nil)
             for file in files where file.pathExtension == "json" {
@@ -235,17 +296,66 @@ public final class KokoroTTSModel {
             AudioLog.modelLoading.debug("Loaded \(voiceEmbeddings.count) voice presets")
         }
 
+        guard !voiceEmbeddings.isEmpty else {
+            throw AudioModelError.modelLoadFailed(
+                modelId: modelId,
+                reason: "No valid Kokoro voice embeddings found in \(voicesDir.path)")
+        }
+
         // Load E2E CoreML model
-        progressHandler?(0.85, "Loading CoreML model...")
-        let network = try KokoroNetwork(directory: cacheDir, computeUnits: computeUnits)
+        report(0.65, "Loading CoreML model...")
+        let network = try KokoroNetwork(directory: directory, computeUnits: computeUnits)
         AudioLog.modelLoading.debug("Loaded Kokoro E2E model")
 
-        progressHandler?(1.0, "Model loaded")
+        report(1.0, "Model loaded")
         AudioLog.modelLoading.info("Kokoro model loaded successfully")
 
         return KokoroTTSModel(
             config: .default, network: network,
             phonemizer: phonemizer, voiceEmbeddings: voiceEmbeddings)
+    }
+
+    private static func validateLocalDirectory(_ directory: URL) throws {
+        let fileManager = FileManager.default
+        let modelId = "kokoro-local"
+
+        func requireFile(_ name: String) throws {
+            let url = directory.appendingPathComponent(name)
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+                throw AudioModelError.modelLoadFailed(
+                    modelId: modelId,
+                    reason: "Required file missing: \(url.path)")
+            }
+        }
+
+        func requireDirectory(_ name: String) throws -> URL {
+            let url = directory.appendingPathComponent(name, isDirectory: true)
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw AudioModelError.modelLoadFailed(
+                    modelId: modelId,
+                    reason: "Required directory missing: \(url.path)")
+            }
+            return url
+        }
+
+        _ = try requireDirectory("kokoro_5s.mlmodelc")
+        _ = try requireDirectory("G2PEncoder.mlmodelc")
+        _ = try requireDirectory("G2PDecoder.mlmodelc")
+        try requireFile("vocab_index.json")
+        try requireFile("g2p_vocab.json")
+        try requireFile("us_gold.json")
+        try requireFile("us_silver.json")
+
+        let voicesDir = try requireDirectory("voices")
+        let voiceFiles = try fileManager.contentsOfDirectory(at: voicesDir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+        guard !voiceFiles.isEmpty else {
+            throw AudioModelError.modelLoadFailed(
+                modelId: modelId,
+                reason: "Required voice JSON missing: \(voicesDir.path) must contain at least one .json voice file")
+        }
     }
 
     /// Load voice embedding from JSON file.

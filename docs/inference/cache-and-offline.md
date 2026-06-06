@@ -56,18 +56,26 @@ let model = try await ParakeetASRModel.fromPretrained(
     offlineMode: true)
 ```
 
-Ship pre-downloaded models in your app bundle, point `cacheDir` at them, and set `offlineMode: true` to guarantee zero network calls.
+For app-bundled Kokoro models, use the dedicated local loader instead of
+`fromPretrained(cacheDir:offlineMode:)`. It reads directly from the directory
+and never enters the HuggingFace downloader path:
+
+```swift
+let kokoro = try await KokoroTTSModel.fromLocalDirectory(
+    bundledModelsDir.appendingPathComponent("Kokoro"),
+    computeUnits: .all)
+```
 
 ## Supported Models
 
-All models support both parameters:
+The table below lists cache/offline support and any dedicated local loader:
 
 | Model | Parameter |
 |-------|-----------|
 | `Qwen3ASRModel` | `cacheDir`, `offlineMode` |
 | `ParakeetASRModel` | `cacheDir`, `offlineMode` |
 | `CoreMLASRModel` | `cacheDir`, `offlineMode` |
-| `KokoroTTSModel` | `cacheDir`, `offlineMode` |
+| `KokoroTTSModel` | `cacheDir`, `offlineMode`, `fromLocalDirectory` |
 | `Qwen3TTSModel` | `cacheDir`, `offlineMode` |
 | `Qwen3TTSCoreMLModel` | `cacheDir`, `offlineMode` |
 | `CosyVoiceTTSModel` | `cacheDir`, `offlineMode` |
